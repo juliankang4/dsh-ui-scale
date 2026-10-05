@@ -11,7 +11,7 @@
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml"],
+  "files": ["lib/index.js", "lib/shim.cjs", "lib/client.js", "cordis.patch.yml"],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {

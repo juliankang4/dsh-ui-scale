@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { createElement as h, useEffect, useId, useRef, useState } from 'react'
+import { installScaleShim, type ScaleShim } from './shim.cjs'
 
 /** Locale namespace, and the settings namespace (the entry id in cordis.patch.yml). */
 const NS = 'ui-scale'
@@ -14,20 +15,20 @@ const PRESETS = [100, 110, 125, 150, 175, 200]
 
 const en = {
   title: 'Interface scale',
-  description: 'Resizes everything except menus and pop-ups',
+  description: 'Resizes the whole interface, including menus and pop-ups',
   input: 'Interface scale in percent',
   presets: 'Scale presets',
 }
 type ScaleKey = keyof typeof en
 const zh: Record<ScaleKey, string> = {
   title: '界面缩放',
-  description: '调整除菜单和弹窗以外的界面大小',
+  description: '调整整个界面的大小，包括菜单和弹窗',
   input: '界面缩放百分比',
   presets: '缩放预设',
 }
 const ko: Record<ScaleKey, string> = {
   title: '화면 배율',
-  description: '메뉴와 팝업을 뺀 화면 전체의 크기를 조절합니다',
+  description: '메뉴와 팝업을 포함한 화면 전체의 크기를 조절합니다',
   input: '화면 배율(퍼센트)',
   presets: '배율 프리셋',
 }
@@ -48,16 +49,6 @@ export function parseScale(text: string): number | undefined {
   if (trimmed === '' || !Number.isFinite(value)) return undefined
   return Math.min(MAX, Math.max(MIN, Math.round(value)))
 }
-
-// dsh sizes and places overlays (menus, tooltips, hover cards) from getBoundingClientRect, which
-// is off by the zoom factor inside a zoomed element. So only the app root and full-window modal
-// layers (Settings, dialogs) are zoomed: overlays portaled to <body> stay at 100%, inline tooltips
-// and menus are zoomed back to 100%, and modal dialogs are capped to the window because their
-// viewport-unit sizes grow with the zoom.
-const LAYERS = '#root,body>[role="presentation"]:has(>[aria-modal="true"])'
-const zoomCss = (scale: number) => scale === 100 ? '' : `${LAYERS}{zoom:${scale / 100}}`
-  + `:is(${LAYERS}) :is([role="tooltip"],[data-menu-material]):not([data-menu-material] *){zoom:${100 / scale}}`
-  + `body>[role="presentation"]>[aria-modal="true"]{max-width:100%;max-height:100%}`
 
 const rowCss = `
 .dsh-ui-scale{display:flex;flex-direction:column;gap:12px;padding:16px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}
@@ -166,20 +157,22 @@ function ScaleRow({ t, useScale, setScale }: RowProps) {
 export const inject = ['slots', 'locale', 'configForms']
 
 export function apply(ctx: Context): void {
-  const boot = (globalThis as { __DSH_UI_SCALE__?: unknown }).__DSH_UI_SCALE__
-  let scale = typeof boot === 'number' ? parseScale(String(boot)) ?? 100 : 100
+  // The host half's head script installs the shim before first paint. A page loaded before the
+  // plugin was enabled (Desktop collects head scripts once per start) gets it here instead.
+  const shim = (globalThis as { __dshUiScale?: ScaleShim }).__dshUiScale ?? installScaleShim(100)
+  ctx.effect(() => () => { shim.dispose() }, 'ui-scale: zoom')
+  let scale = shim.get()
   const listeners = new Set<() => void>()
-  const style = document.getElementById('dsh-ui-scale') ?? Object.assign(document.createElement('style'), { id: 'dsh-ui-scale' })
   const show = (next: number) => {
     scale = next
-    style.textContent = zoomCss(next) + rowCss
+    shim.set(next)
     for (const listener of listeners) listener()
   }
-  show(scale)
   ctx.effect(() => {
+    const style = Object.assign(document.createElement('style'), { id: 'dsh-ui-scale', textContent: rowCss })
     document.head.append(style)
     return () => { style.remove() }
-  }, 'ui-scale: styles')
+  }, 'ui-scale: row styles')
 
   const form = ctx.configForms.get<{ scale: number }>(NS)
   // Host reads that land between quick writes carry older values; adopt only once our writes settle.

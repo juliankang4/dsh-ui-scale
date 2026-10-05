@@ -27,3 +27,17 @@ test('rejects text that is not a number', () => {
   assert.equal(parseScale('12px'), undefined)
   assert.equal(parseScale('%'), undefined)
 })
+
+test('divides viewport units but leaves strings and urls alone', async () => {
+  const { scaleViewportUnits } = await import('../lib/shim.cjs') as { scaleViewportUnits: (value: string) => string }
+  const scaled = (unit: string) => `calc(${unit} / var(--dsh-ui-scale, 1))`
+  assert.equal(scaleViewportUnits('calc(100vh - 2 * 24px)'), `calc(${scaled('100vh')} - 2 * 24px)`)
+  assert.equal(scaleViewportUnits('-10vw 0 0 .5dvh'), `${scaled('-10vw')} 0 0 ${scaled('.5dvh')}`)
+  assert.equal(scaleViewportUnits('min(60vh, 520px)'), `min(${scaled('60vh')}, 520px)`)
+  assert.equal(scaleViewportUnits('"100vw"'), '"100vw"')
+  assert.equal(scaleViewportUnits(`url("/100vw.png") 'a 1vh'`), `url("/100vw.png") 'a 1vh'`)
+  assert.equal(scaleViewportUnits('url(/img/10vh.png)'), 'url(/img/10vh.png)')
+  assert.equal(scaleViewportUnits(`url("/img)100vw.png") 1vh`), `url("/img)100vw.png") ${scaled('1vh')}`)
+  assert.equal(scaleViewportUnits(`url(/a\\)1vw.png) "x\\"2vh"`), `url(/a\\)1vw.png) "x\\"2vh"`)
+  assert.equal(scaleViewportUnits('var(--gap-2vw) 12px'), 'var(--gap-2vw) 12px')
+})

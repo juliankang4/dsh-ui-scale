@@ -1,6 +1,7 @@
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
+import { installScaleShim, scaleViewportUnits } from './shim.cjs'
 
 export const name = 'dsh-ui-scale'
 
@@ -14,13 +15,12 @@ export const Config = z.object({
 })
 
 export function apply(ctx: Context, config: Config): void {
-  // Zoom the page from its first paint; the client plugin takes over this style element when it loads.
+  // Zoom the page from its first paint; the client plugin changes the scale through the shim later.
   ctx.on('webserver/index-inject', (table) => {
-    const scale = config.scale.get()
     table.push({
       kind: 'script',
       placement: 'head',
-      text: `globalThis.__DSH_UI_SCALE__=${scale};document.head.append(Object.assign(document.createElement('style'),{id:'dsh-ui-scale',textContent:'#root{zoom:${scale / 100}}'}))`,
+      text: `(() => { ${scaleViewportUnits}; (${installScaleShim})(${config.scale.get()}) })()`,
     })
   })
 }
