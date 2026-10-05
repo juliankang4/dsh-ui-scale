@@ -22,19 +22,19 @@ The scale is saved in the profile configuration. It survives restarts and is app
 
 ## What scales
 
-- Scaled: the main window (sidebars, conversation, composer, pages), Settings and other modal dialogs. A dialog that would grow past the window is limited to the window size and scrolls inside.
-- Normal size: menus (including the `/` command menu), dropdowns, tooltips, hover cards, toasts and other pop-ups attached to a control. Scaling them would move them away from the control they belong to, so they stay at normal size. The image preview and the Desktop app's native right-click menu are also unchanged.
+Everything in the window: sidebars, conversation, composer, pages, Settings and other dialogs, and the menus, tooltips and pop-ups attached to them. The layout behaves as it would under browser zoom: at a high scale in a small window the left sidebar collapses, panels keep their share of the window, and dragging a divider follows the pointer.
 
-Which areas scale depends on how the dsh Web UI page is built, so a dsh update can leave some areas at normal size until the plugin is updated.
+The Desktop app's native menus and window controls keep their normal size.
 
 ## Limits
 
-The plugin uses CSS zoom, not browser zoom, so dsh still lays out the page for the real window size. This shows in two places:
+The plugin applies CSS zoom and converts what the page measures to the zoomed scale: element positions and sizes, the window size, pointer positions and the viewport units in style sheets. Some things fall outside that conversion:
 
-- At high scales the left sidebar does not collapse as early as it would in a small window, and the right sidebar can extend past the window edge.
-- Dragging a panel divider moves it faster than the pointer (twice as fast at 200%).
+- A viewport size (`vw`, `vh`) set inline on an element, or added from script with `insertRule`, is not converted. Such an element can come out larger than the window.
+- Media queries in style sheets follow the scale, but `matchMedia` in scripts and `IntersectionObserver` rectangles still use the real window size.
+- Every script on the page sees the converted values, including other plugins.
 
-In a browser you can use the browser's own zoom instead, which has none of these limits.
+In a browser you can also use the browser's own zoom; the two multiply.
 
 ## Configuration
 
@@ -51,4 +51,4 @@ The settings row writes this field. You can also set it in the profile's `cordis
     scale: 125
 ```
 
-Tested with dsh 0.2.0-rc.2 (web and Desktop).
+Tested with dsh 0.2.0-rc.2 (web in Chrome, and the macOS Desktop app).

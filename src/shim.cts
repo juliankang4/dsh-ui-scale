@@ -1,0 +1,151 @@
+// Page zoom for a renderer that offers none. The document gets CSS zoom, and what standardized
+// zoom leaves in window pixels (element rects, window size, pointer coordinates, hit tests,
+// viewport units, media query bounds) is converted to the zoomed CSS pixels layout uses. Page
+// code then measures and places things as it would under browser zoom.
+//
+// The host injects the source of both functions as a head script, so they must stay
+// self-contained apart from installScaleShim calling scaleViewportUnits.
+
+/** Divide the viewport units in a CSS value by the scale variable; strings and url() stay as they are. */
+export function scaleViewportUnits(value: string): string {
+  return value.replace(
+    /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|url\(\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:[^)\\]|\\.)*)\s*\))|(?<![\w.-])(-?\d*\.?\d+)([sld]?v(?:w|h|i|b|min|max))\b/g,
+    (match, kept: string | undefined, n: string, unit: string) => kept ?? `calc(${n}${unit} / var(--dsh-ui-scale, 1))`,
+  )
+}
+
+export interface ScaleShim {
+  get(): number
+  set(scale: number): void
+  /** Undo every change the shim made to the page. */
+  dispose(): void
+}
+
+export function installScaleShim(initial: number): ScaleShim {
+  let z = 1
+  const undo: (() => void)[] = []
+  const style = document.createElement('style')
+
+  const patch = <T extends object>(owner: T, name: keyof T & string, descriptor: PropertyDescriptor) => {
+    const original = Object.getOwnPropertyDescriptor(owner, name)!
+    Object.defineProperty(owner, name, { ...original, ...descriptor })
+    undo.push(() => { Object.defineProperty(owner, name, original) })
+  }
+
+  const rect = (r: DOMRect) => z === 1 ? r : new DOMRect(r.x / z, r.y / z, r.width / z, r.height / z)
+  for (const proto of [Element.prototype, Range.prototype] as (Element | Range)[]) {
+    const one = proto.getBoundingClientRect
+    const all = proto.getClientRects
+    patch(proto, 'getBoundingClientRect', { value(this: Element & Range) { return rect(one.call(this)) } })
+    patch(proto, 'getClientRects', {
+      value(this: Element & Range) {
+        const list = all.call(this)
+        if (z === 1) return list
+        const rects = Array.from(list, rect)
+        return Object.setPrototypeOf(Object.assign(rects, { item: (i: number) => rects[i] ?? null }), DOMRectList.prototype)
+      },
+    })
+  }
+
+  const convert = (target: object, names: string[], to: (this: unknown, value: number) => number) => {
+    for (const name of names) {
+      let owner: object | null = target
+      while (owner !== null && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner)
+      const get = owner === null ? undefined : Object.getOwnPropertyDescriptor(owner, name)!.get
+      if (get !== undefined) patch(owner!, name as never, { get(this: unknown) { return to.call(this, get.call(this) as number) } })
+    }
+  }
+  convert(window, ['innerWidth', 'innerHeight'], value => value / z)
+  convert(VisualViewport.prototype, ['width', 'height', 'offsetLeft', 'offsetTop', 'pageLeft', 'pageTop'], value => value / z)
+  // Events created by page code already carry the CSS pixels it computed.
+  convert(MouseEvent.prototype, ['clientX', 'clientY', 'pageX', 'pageY', 'x', 'y', 'offsetX', 'offsetY', 'movementX', 'movementY'],
+    function (this: unknown, value) { return (this as Event).isTrusted ? value / z : value })
+  // Canvas content such as PDF pages renders at the sharper ratio, as under browser zoom.
+  convert(window, ['devicePixelRatio'], value => value * z)
+
+  // Hit tests take window pixels; callers now pass CSS pixels.
+  for (const name of ['elementFromPoint', 'elementsFromPoint', 'caretRangeFromPoint', 'caretPositionFromPoint'] as const) {
+    const original = (Document.prototype as unknown as Record<string, unknown>)[name]
+    if (typeof original !== 'function') continue
+    patch(Document.prototype, name as never, { value(this: Document, x: number, y: number) { return original.call(this, x * z, y * z) } })
+  }
+
+  // Viewport units resolve before zoom, so 100vw would be z windows wide. Style sheet values are
+  // divided by a variable, which follows later scale changes. Media queries see the real window,
+  // so their pixel bounds are multiplied instead, from the original text on each change.
+  const seen = new WeakSet<CSSStyleSheet>()
+  const media = new Map<CSSMediaRule, string>()
+  const bound = (rule: CSSMediaRule, text: string) => {
+    const next = text.replace(/(\d*\.?\d+)px/g, (_, n: string) => `${Number(n) * z}px`)
+    if (rule.media.mediaText !== next) rule.media.mediaText = next
+  }
+  const walk = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      const declarations = (rule as Partial<CSSStyleRule>).style
+      for (const name of declarations === undefined ? [] : Array.from(declarations)) {
+        const value = declarations!.getPropertyValue(name)
+        const next = scaleViewportUnits(value)
+        if (next === value) continue
+        const priority = declarations!.getPropertyPriority(name)
+        declarations!.setProperty(name, next, priority)
+        undo.push(() => { declarations!.setProperty(name, value, priority) })
+      }
+      if (rule instanceof CSSMediaRule && /\dpx/.test(rule.media.mediaText)) {
+        const text = rule.media.mediaText
+        media.set(rule, text)
+        bound(rule, text)
+        undo.push(() => { rule.media.mediaText = text })
+      }
+      const nested = (rule as Partial<CSSGroupingRule>).cssRules
+      if (nested !== undefined) walk(nested)
+    }
+  }
+  const scan = () => {
+    for (const sheet of Array.from(document.styleSheets)) {
+      if (seen.has(sheet) || sheet.ownerNode === style) continue
+      try {
+        walk(sheet.cssRules)
+        seen.add(sheet)
+      } catch {
+        // A sheet that is still loading throws; its load event scans again.
+      }
+    }
+  }
+  const sheetNode = (node: Node) => node.nodeName === 'STYLE' || node.nodeName === 'LINK'
+  const observer = new MutationObserver((records) => {
+    if (records.some(r => sheetNode(r.target) || Array.from(r.addedNodes).some(sheetNode))) scan()
+  })
+  observer.observe(document, { childList: true, subtree: true })
+  document.addEventListener('load', scan, true)
+  undo.push(() => {
+    observer.disconnect()
+    document.removeEventListener('load', scan, true)
+    style.remove()
+  })
+
+  const set = (scale: number) => {
+    z = scale / 100
+    // The right panel's fullscreen width is the one inline viewport unit in dsh.
+    style.textContent = z === 1 ? '' : `html{zoom:${z};--dsh-ui-scale:${z}}`
+      + '[data-sidebar-right-panel="fullscreen"]{width:calc(100vw / var(--dsh-ui-scale))!important;'
+      + '--dsh-sidebar-width:calc(100vw / var(--dsh-ui-scale))!important}'
+    for (const [rule, text] of media) bound(rule, text)
+    scan()
+    // Overlays re-place themselves on resize.
+    window.dispatchEvent(new Event('resize'))
+  }
+  const global = globalThis as { __dshUiScale?: ScaleShim }
+  const shim: ScaleShim = {
+    get: () => z * 100,
+    set,
+    dispose: () => {
+      set(100)
+      for (const step of undo.reverse()) step()
+      delete global.__dshUiScale
+    },
+  }
+  global.__dshUiScale = shim
+  document.head.append(style)
+  set(initial)
+  return shim
+}
