@@ -95,10 +95,19 @@ export function installScaleShim(initial: number): ScaleShim {
   }
   convert(VisualViewport.prototype, ['width', 'height', 'offsetLeft', 'offsetTop', 'pageLeft', 'pageTop'], value => value / z)
   // Events created by page code already carry the CSS pixels it computed.
-  convert(MouseEvent.prototype, ['clientX', 'clientY', 'pageX', 'pageY', 'x', 'y', 'offsetX', 'offsetY', 'movementX', 'movementY'],
+  convert(MouseEvent.prototype, ['clientX', 'clientY', 'pageX', 'pageY', 'x', 'y', 'offsetX', 'offsetY', 'layerX', 'layerY', 'movementX', 'movementY'],
     function (this: unknown, value) { return (this as Event).isTrusted ? value / z : value })
   // Canvas content such as PDF pages renders at the sharper ratio, as under browser zoom.
   convert(window, ['devicePixelRatio'], value => value * z)
+
+  // An SVG element's screen matrix includes the zoom; pointer math pairs it with CSS pixel events.
+  const screenMatrix = SVGGraphicsElement.prototype.getScreenCTM
+  patch(SVGGraphicsElement.prototype, 'getScreenCTM', {
+    value(this: SVGGraphicsElement) {
+      const m = screenMatrix.call(this)
+      return m === null || z === 1 ? m : new DOMMatrix([m.a / z, m.b / z, m.c / z, m.d / z, m.e / z, m.f / z])
+    },
+  })
 
   // Hit tests take window pixels; callers now pass CSS pixels.
   for (const name of ['elementFromPoint', 'elementsFromPoint', 'caretRangeFromPoint', 'caretPositionFromPoint'] as const) {
@@ -109,7 +118,94 @@ export function installScaleShim(initial: number): ScaleShim {
 
   // Viewport units resolve before zoom, so 100vw would be z windows wide. Style sheet and inline
   // values are divided by a variable, which follows later scale changes. Media queries see the
-  // real window, so their pixel bounds are multiplied instead, from the original text on each change.
+  // real window, so their length bounds are multiplied instead, from the original text on each
+  // change, in style sheets and in matchMedia.
+  // Expects serialized media text (lowercase units, plain numbers), as the CSSOM returns it.
+  const hasLength = (text: string) => /\d(px|r?em)\b/.test(text)
+  const scaleQuery = (text: string) => text.replace(/(\d*\.?\d+)(px|r?em)\b/g, (_, n: string, unit: string) => `${Number(n) * z}${unit}`)
+  const lists = new Set<WeakRef<MediaQueryList>>()
+  const refreshers = new WeakMap<MediaQueryList, () => void>()
+  const nativeMatchMedia = window.matchMedia
+  const { addEventListener: listen, removeEventListener: unlisten } = EventTarget.prototype
+  patch(window, 'matchMedia', {
+    value(query: string) {
+      let native = nativeMatchMedia.call(window, String(query))
+      const text = native.media
+      if (!hasLength(text)) return native
+      // A stand-in list follows the scale: it swaps the underlying query and reports a change.
+      // It listens to the underlying list only while it has subscribers, so an unused list can go.
+      const list = new EventTarget() as MediaQueryList
+      // Registrations as EventTarget keeps them: listener and capture; onchange counts on its own.
+      // A `once` registration gets a marker listener just before it that forgets it when it runs;
+      // `signal` registrations are forgotten on abort.
+      const registered = new Map<unknown, Map<boolean, EventListener | null>>()
+      let handler: ((this: MediaQueryList, event: MediaQueryListEvent) => unknown) | null = null
+      const relay = (event: MediaQueryListEvent) => {
+        list.dispatchEvent(new MediaQueryListEvent('change', { matches: event.matches, media: text }))
+      }
+      const sync = () => {
+        unlisten.call(native, 'change', relay as EventListener)
+        if (handler !== null || registered.size > 0) listen.call(native, 'change', relay as EventListener)
+      }
+      const drop = (listener: unknown, capture: boolean) => {
+        const byCapture = registered.get(listener)
+        if (byCapture === undefined || !byCapture.has(capture)) return
+        const marker = byCapture.get(capture)
+        if (marker) unlisten.call(list, 'change', marker, capture)
+        byCapture.delete(capture)
+        if (byCapture.size === 0) registered.delete(listener)
+        sync()
+      }
+      const captureOf = (options?: EventListenerOptions | boolean) => typeof options === 'boolean' ? options : options?.capture === true
+      listen.call(list, 'change', (event) => { handler?.call(list, event as MediaQueryListEvent) })
+      native = nativeMatchMedia.call(window, scaleQuery(text))
+      Object.defineProperties(list, {
+        media: { value: text },
+        matches: { get: () => native.matches },
+        onchange: {
+          get: () => handler,
+          set: (value: typeof handler) => {
+            handler = typeof value === 'function' ? value : null
+            sync()
+          },
+        },
+        addEventListener: {
+          value(type: string, listener: EventListenerOrEventListenerObject | null, options?: AddEventListenerOptions | boolean) {
+            const capture = captureOf(options)
+            const signal = typeof options === 'object' ? options.signal : undefined
+            const track = type === 'change' && listener !== null && signal?.aborted !== true && registered.get(listener)?.has(capture) !== true
+            let marker: EventListener | null = null
+            if (track && typeof options === 'object' && options.once === true) {
+              marker = () => { registered.get(listener)?.set(capture, null); drop(listener, capture) }
+              listen.call(list, 'change', marker, { capture, once: true, signal })
+            }
+            listen.call(list, type, listener, options)
+            if (!track) return
+            registered.set(listener, (registered.get(listener) ?? new Map()).set(capture, marker))
+            signal?.addEventListener('abort', () => { drop(listener, capture) }, { once: true })
+            sync()
+          },
+        },
+        removeEventListener: {
+          value(type: string, listener: EventListenerOrEventListenerObject | null, options?: EventListenerOptions | boolean) {
+            unlisten.call(list, type, listener, options)
+            if (type === 'change') drop(listener, captureOf(options))
+          },
+        },
+        addListener: { value: (listener: EventListener | null) => { (list as EventTarget).addEventListener('change', listener) } },
+        removeListener: { value: (listener: EventListener | null) => { (list as EventTarget).removeEventListener('change', listener) } },
+      })
+      refreshers.set(list, () => {
+        const before = native.matches
+        unlisten.call(native, 'change', relay as EventListener)
+        native = nativeMatchMedia.call(window, scaleQuery(text))
+        sync()
+        if (native.matches !== before) relay(new MediaQueryListEvent('change', { matches: native.matches, media: text }))
+      })
+      lists.add(new WeakRef(list))
+      return list
+    },
+  })
   const scaleDeclarations = (declarations: CSSStyleDeclaration, keep: (name: string, value: string, next: string, priority: string) => void) => {
     for (const name of Array.from(declarations)) {
       const value = declarations.getPropertyValue(name)
@@ -124,7 +220,7 @@ export function installScaleShim(initial: number): ScaleShim {
   const seen = new WeakSet<CSSStyleSheet>()
   const media = new Map<CSSMediaRule, string>()
   const bound = (rule: CSSMediaRule, text: string) => {
-    const next = text.replace(/(\d*\.?\d+)px/g, (_, n: string) => `${Number(n) * z}px`)
+    const next = scaleQuery(text)
     if (rule.media.mediaText !== next) rule.media.mediaText = next
   }
   const walk = (rules: CSSRuleList) => {
@@ -135,7 +231,7 @@ export function installScaleShim(initial: number): ScaleShim {
           undo.push(() => { declarations.setProperty(name, value, priority) })
         })
       }
-      if (rule instanceof CSSMediaRule && /\dpx/.test(rule.media.mediaText)) {
+      if (rule instanceof CSSMediaRule && hasLength(rule.media.mediaText)) {
         const text = rule.media.mediaText
         media.set(rule, text)
         bound(rule, text)
@@ -151,6 +247,8 @@ export function installScaleShim(initial: number): ScaleShim {
       try {
         walk(sheet.cssRules)
         seen.add(sheet)
+        // Frameworks may rewrite a style element's text node in place; that replaces its sheet.
+        if (sheet.ownerNode?.nodeName === 'STYLE') observer.observe(sheet.ownerNode, { characterData: true, subtree: true })
       } catch {
         // A sheet that is still loading throws; its load event scans again.
       }
@@ -178,7 +276,7 @@ export function installScaleShim(initial: number): ScaleShim {
     let sheets = false
     for (const r of records) {
       if (r.type === 'attributes') inline(r.target as Element)
-      sheets ||= sheetNode(r.target)
+      sheets ||= r.type === 'characterData' || sheetNode(r.target)
       for (const node of Array.from(r.addedNodes)) {
         sheets ||= sheetNode(node)
         if (!(node instanceof Element)) continue
@@ -207,6 +305,11 @@ export function installScaleShim(initial: number): ScaleShim {
     z = scale / 100
     style.textContent = z === 1 ? '' : `html{zoom:${z};--dsh-ui-scale:${z}}`
     for (const [rule, text] of media) bound(rule, text)
+    for (const ref of lists) {
+      const list = ref.deref()
+      if (list === undefined) lists.delete(ref)
+      else refreshers.get(list)!()
+    }
     scan()
     // Overlays re-place themselves on resize.
     window.dispatchEvent(new Event('resize'))
