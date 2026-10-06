@@ -12,6 +12,8 @@ const MIN = 50
 const MAX = 200
 const STEP = 5
 const PRESETS = [100, 110, 125, 150, 175, 200]
+/** Desktop window bounds in localStorage; the host half's restoreWindow reads the same key. */
+const WINDOW_KEY = 'dsh-ui-scale:window'
 
 const en = {
   title: 'Interface scale',
@@ -202,6 +204,17 @@ export function apply(ctx: Context): void {
       return () => { listeners.delete(listener) }
     },
   }
+
+  // Desktop opens its window at a fixed size; the host half's head script restores what is saved here.
+  if (location.protocol === 'dsh-app:') ctx.effect(() => {
+    const timer = setInterval(() => {
+      // A full-screen size is no window size to come back to.
+      if (outerWidth === screen.width && outerHeight === screen.height) return
+      const bounds = JSON.stringify({ x: screenX, y: screenY, w: outerWidth, h: outerHeight })
+      if (bounds !== localStorage.getItem(WINDOW_KEY)) localStorage.setItem(WINDOW_KEY, bounds)
+    }, 1000)
+    return () => { clearInterval(timer) }
+  }, 'ui-scale: window bounds')
 
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'ui-scale: en/zh strings')
   ctx.effect(() => ctx.locale.register(NS, 'ko', ko), 'ui-scale: ko strings')
