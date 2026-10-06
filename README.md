@@ -28,9 +28,9 @@ The Desktop app's native menus and window controls keep their normal size.
 
 ## Limits
 
-The plugin applies CSS zoom and converts what the page measures to the zoomed scale: element positions and sizes, the window size, pointer positions and the viewport units in style sheets. Some things fall outside that conversion:
+The plugin applies CSS zoom and converts what the page measures to the zoomed scale: element positions and sizes, the window size, pointer positions and the viewport units in style sheets and inline styles. Some things fall outside that conversion:
 
-- A viewport size (`vw`, `vh`) set inline on an element, or added from script with `insertRule`, is not converted. Such an element can come out larger than the window.
+- A viewport size (`vw`, `vh`) in a style rule added from script with `insertRule`, inside a shadow root, or on a MathML element is not converted. Such an element can come out larger than the window.
 - Media queries in style sheets follow the scale, but `matchMedia` in scripts and `IntersectionObserver` rectangles still use the real window size.
 - Every script on the page sees the converted values, including other plugins.
 
