@@ -70,9 +70,20 @@ export function installScaleShim(initial: number): ScaleShim {
     patch(Document.prototype, name as never, { value(this: Document, x: number, y: number) { return original.call(this, x * z, y * z) } })
   }
 
-  // Viewport units resolve before zoom, so 100vw would be z windows wide. Style sheet values are
-  // divided by a variable, which follows later scale changes. Media queries see the real window,
-  // so their pixel bounds are multiplied instead, from the original text on each change.
+  // Viewport units resolve before zoom, so 100vw would be z windows wide. Style sheet and inline
+  // values are divided by a variable, which follows later scale changes. Media queries see the
+  // real window, so their pixel bounds are multiplied instead, from the original text on each change.
+  const scaleDeclarations = (declarations: CSSStyleDeclaration, keep: (name: string, value: string, next: string, priority: string) => void) => {
+    for (const name of Array.from(declarations)) {
+      const value = declarations.getPropertyValue(name)
+      // Our own writes come back through the observer; converted values are left alone.
+      const next = value.includes('--dsh-ui-scale') ? value : scaleViewportUnits(value)
+      if (next === value) continue
+      const priority = declarations.getPropertyPriority(name)
+      declarations.setProperty(name, next, priority)
+      keep(name, value, next, priority)
+    }
+  }
   const seen = new WeakSet<CSSStyleSheet>()
   const media = new Map<CSSMediaRule, string>()
   const bound = (rule: CSSMediaRule, text: string) => {
@@ -82,13 +93,10 @@ export function installScaleShim(initial: number): ScaleShim {
   const walk = (rules: CSSRuleList) => {
     for (const rule of Array.from(rules)) {
       const declarations = (rule as Partial<CSSStyleRule>).style
-      for (const name of declarations === undefined ? [] : Array.from(declarations)) {
-        const value = declarations!.getPropertyValue(name)
-        const next = scaleViewportUnits(value)
-        if (next === value) continue
-        const priority = declarations!.getPropertyPriority(name)
-        declarations!.setProperty(name, next, priority)
-        undo.push(() => { declarations!.setProperty(name, value, priority) })
+      if (declarations !== undefined) {
+        scaleDeclarations(declarations, (name, value, _, priority) => {
+          undo.push(() => { declarations.setProperty(name, value, priority) })
+        })
       }
       if (rule instanceof CSSMediaRule && /\dpx/.test(rule.media.mediaText)) {
         const text = rule.media.mediaText
@@ -111,24 +119,56 @@ export function installScaleShim(initial: number): ScaleShim {
       }
     }
   }
+  // Inline styles are rewritten when set and when their element joins the page.
+  // Each converted inline value is restored on dispose unless page code has replaced it since.
+  // Weak references let removed elements go.
+  const converted = new Set<WeakRef<CSSStyleDeclaration>>()
+  const originals = new WeakMap<CSSStyleDeclaration, Map<string, { value: string, next: string, priority: string }>>()
+  const inline = (element: Element) => {
+    if (!(element instanceof HTMLElement || element instanceof SVGElement)) return
+    const declarations = element.style
+    scaleDeclarations(declarations, (name, value, next, priority) => {
+      let own = originals.get(declarations)
+      if (own === undefined) {
+        originals.set(declarations, own = new Map())
+        converted.add(new WeakRef(declarations))
+      }
+      own.set(name, { value, next, priority })
+    })
+  }
   const sheetNode = (node: Node) => node.nodeName === 'STYLE' || node.nodeName === 'LINK'
   const observer = new MutationObserver((records) => {
-    if (records.some(r => sheetNode(r.target) || Array.from(r.addedNodes).some(sheetNode))) scan()
+    let sheets = false
+    for (const r of records) {
+      if (r.type === 'attributes') inline(r.target as Element)
+      sheets ||= sheetNode(r.target)
+      for (const node of Array.from(r.addedNodes)) {
+        sheets ||= sheetNode(node)
+        if (!(node instanceof Element)) continue
+        if (node.hasAttribute('style')) inline(node)
+        node.querySelectorAll('[style]').forEach(inline)
+      }
+    }
+    if (sheets) scan()
   })
-  observer.observe(document, { childList: true, subtree: true })
+  observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
+  document.querySelectorAll('[style]').forEach(inline)
   document.addEventListener('load', scan, true)
   undo.push(() => {
     observer.disconnect()
     document.removeEventListener('load', scan, true)
     style.remove()
+    for (const ref of converted) {
+      const declarations = ref.deref()
+      for (const [name, { value, next, priority }] of declarations === undefined ? [] : originals.get(declarations)!) {
+        if (declarations!.getPropertyValue(name) === next) declarations!.setProperty(name, value, priority)
+      }
+    }
   })
 
   const set = (scale: number) => {
     z = scale / 100
-    // The right panel's fullscreen width is the one inline viewport unit in dsh.
     style.textContent = z === 1 ? '' : `html{zoom:${z};--dsh-ui-scale:${z}}`
-      + '[data-sidebar-right-panel="fullscreen"]{width:calc(100vw / var(--dsh-ui-scale))!important;'
-      + '--dsh-sidebar-width:calc(100vw / var(--dsh-ui-scale))!important}'
     for (const [rule, text] of media) bound(rule, text)
     scan()
     // Overlays re-place themselves on resize.
