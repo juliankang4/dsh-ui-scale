@@ -97,8 +97,15 @@ export function installScaleShim(initial: number): ScaleShim {
   // Events created by page code already carry the CSS pixels it computed.
   convert(MouseEvent.prototype, ['clientX', 'clientY', 'pageX', 'pageY', 'x', 'y', 'offsetX', 'offsetY', 'layerX', 'layerY', 'movementX', 'movementY'],
     function (this: unknown, value) { return (this as Event).isTrusted ? value / z : value })
+  // Wheel deltas in pixels scroll by CSS pixels, as under browser zoom.
+  convert(WheelEvent.prototype, ['deltaX', 'deltaY', 'deltaZ'],
+    function (this: unknown, value) { return (this as WheelEvent).isTrusted && (this as WheelEvent).deltaMode === 0 ? value / z : value })
   // Canvas content such as PDF pages renders at the sharper ratio, as under browser zoom.
+  const nativeRatio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')!.get!
   convert(window, ['devicePixelRatio'], value => value * z)
+  // Zoom-aware code would otherwise divide the converted rects once more.
+  // An element without a box (hidden or detached) reports 1 either way.
+  convert(Element.prototype, ['currentCSSZoom'], function (value) { return (this as Element).getClientRects().length > 0 ? value / z : value })
 
   // An SVG element's screen matrix includes the zoom; pointer math pairs it with CSS pixel events.
   const screenMatrix = SVGGraphicsElement.prototype.getScreenCTM
@@ -119,19 +126,34 @@ export function installScaleShim(initial: number): ScaleShim {
   // Viewport units resolve before zoom, so 100vw would be z windows wide. Style sheet and inline
   // values are divided by a variable, which follows later scale changes. Media queries see the
   // real window, so their length bounds are multiplied instead, from the original text on each
-  // change, in style sheets and in matchMedia.
-  // Expects serialized media text (lowercase units, plain numbers), as the CSSOM returns it.
-  const hasLength = (text: string) => /\d(px|r?em)\b/.test(text)
-  const scaleQuery = (text: string) => text.replace(/(\d*\.?\d+)(px|r?em)\b/g, (_, n: string, unit: string) => `${Number(n) * z}${unit}`)
+  // change, in style sheets and in matchMedia. Resolution bounds are divided, so they agree with
+  // the scaled devicePixelRatio. The reported ratio itself maps to the native one, since dividing
+  // it back can miss by a rounding step and watchers compare it for equality.
+  const number = '(?<![\\w.-])((?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?)'
+  const sized = new RegExp(`${number}(px|r?em|dppx|x|dpi|dpcm)\\b`, 'gi')
+  const ratioFeature = /\([^()]*device-pixel-ratio[^()]*\)/gi
+  const hasLength = (text: string) => new RegExp(sized.source, 'i').test(text) || /device-pixel-ratio/i.test(text)
+  const ratio = (n: number) => {
+    const own = nativeRatio.call(window) as number
+    return n === own * z ? own : n / z
+  }
+  const scaleQuery = (text: string) => text
+    .replace(ratioFeature, feature => feature.replace(new RegExp(`${number}(?![\\w.%])`, 'gi'), n => `${ratio(Number(n))}`))
+    .replace(sized, (_, n: string, unit: string) => {
+      if (/^(px|r?em)$/i.test(unit)) return `${Number(n) * z}${unit}`
+      return `${/^(dppx|x)$/i.test(unit) ? ratio(Number(n)) : Number(n) / z}${unit}`
+    })
   const lists = new Set<WeakRef<MediaQueryList>>()
   const refreshers = new WeakMap<MediaQueryList, () => void>()
   const nativeMatchMedia = window.matchMedia
   const { addEventListener: listen, removeEventListener: unlisten } = EventTarget.prototype
   patch(window, 'matchMedia', {
     value(query: string) {
-      let native = nativeMatchMedia.call(window, String(query))
+      // Scale the query as written, since serialization rounds numbers; `media` shows the serialized form.
+      const source = String(query)
+      let native = nativeMatchMedia.call(window, source)
       const text = native.media
-      if (!hasLength(text)) return native
+      if (!hasLength(source)) return native
       // A stand-in list follows the scale: it swaps the underlying query and reports a change.
       // It listens to the underlying list only while it has subscribers, so an unused list can go.
       const list = new EventTarget() as MediaQueryList
@@ -158,7 +180,7 @@ export function installScaleShim(initial: number): ScaleShim {
       }
       const captureOf = (options?: EventListenerOptions | boolean) => typeof options === 'boolean' ? options : options?.capture === true
       listen.call(list, 'change', (event) => { handler?.call(list, event as MediaQueryListEvent) })
-      native = nativeMatchMedia.call(window, scaleQuery(text))
+      native = nativeMatchMedia.call(window, scaleQuery(source))
       Object.defineProperties(list, {
         media: { value: text },
         matches: { get: () => native.matches },
@@ -198,7 +220,7 @@ export function installScaleShim(initial: number): ScaleShim {
       refreshers.set(list, () => {
         const before = native.matches
         unlisten.call(native, 'change', relay as EventListener)
-        native = nativeMatchMedia.call(window, scaleQuery(text))
+        native = nativeMatchMedia.call(window, scaleQuery(source))
         sync()
         if (native.matches !== before) relay(new MediaQueryListEvent('change', { matches: native.matches, media: text }))
       })
@@ -218,10 +240,17 @@ export function installScaleShim(initial: number): ScaleShim {
     }
   }
   const seen = new WeakSet<CSSStyleSheet>()
-  const media = new Map<CSSMediaRule, string>()
-  const bound = (rule: CSSMediaRule, text: string) => {
+  const media = new Map<MediaList, string>()
+  const bound = (list: MediaList, text: string) => {
     const next = scaleQuery(text)
-    if (rule.media.mediaText !== next) rule.media.mediaText = next
+    if (list.mediaText !== next) list.mediaText = next
+  }
+  const follow = (list: MediaList) => {
+    const text = list.mediaText
+    if (media.has(list) || !hasLength(text)) return
+    media.set(list, text)
+    bound(list, text)
+    undo.push(() => { list.mediaText = text })
   }
   const walk = (rules: CSSRuleList) => {
     for (const rule of Array.from(rules)) {
@@ -231,20 +260,16 @@ export function installScaleShim(initial: number): ScaleShim {
           undo.push(() => { declarations.setProperty(name, value, priority) })
         })
       }
-      if (rule instanceof CSSMediaRule && hasLength(rule.media.mediaText)) {
-        const text = rule.media.mediaText
-        media.set(rule, text)
-        bound(rule, text)
-        undo.push(() => { rule.media.mediaText = text })
-      }
+      if (rule instanceof CSSMediaRule) follow(rule.media)
       const nested = (rule as Partial<CSSGroupingRule>).cssRules
       if (nested !== undefined) walk(nested)
     }
   }
   const scan = () => {
-    for (const sheet of Array.from(document.styleSheets)) {
+    for (const sheet of [...Array.from(document.styleSheets), ...document.adoptedStyleSheets]) {
       if (seen.has(sheet) || sheet.ownerNode === style) continue
       try {
+        follow(sheet.media)
         walk(sheet.cssRules)
         seen.add(sheet)
         // Frameworks may rewrite a style element's text node in place; that replaces its sheet.
@@ -254,6 +279,13 @@ export function installScaleShim(initial: number): ScaleShim {
       }
     }
   }
+  const adopted = Object.getOwnPropertyDescriptor(Document.prototype, 'adoptedStyleSheets')!
+  patch(Document.prototype, 'adoptedStyleSheets', {
+    set(this: Document, sheets: CSSStyleSheet[]) {
+      adopted.set!.call(this, sheets)
+      scan()
+    },
+  })
   // Inline styles are rewritten when set and when their element joins the page.
   // Each converted inline value is restored on dispose unless page code has replaced it since.
   // Weak references let removed elements go.
@@ -304,7 +336,7 @@ export function installScaleShim(initial: number): ScaleShim {
   const set = (scale: number) => {
     z = scale / 100
     style.textContent = z === 1 ? '' : `html{zoom:${z};--dsh-ui-scale:${z}}`
-    for (const [rule, text] of media) bound(rule, text)
+    for (const [list, text] of media) bound(list, text)
     for (const ref of lists) {
       const list = ref.deref()
       if (list === undefined) lists.delete(ref)
