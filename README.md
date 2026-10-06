@@ -26,6 +26,10 @@ Everything in the window: sidebars, conversation, composer, pages, Settings and 
 
 The Desktop app's native menus and window controls keep their normal size.
 
+## Desktop window size
+
+The Desktop app opens its window at the same default size on every start. With this plugin enabled it opens at the size and position you left it in. The window is not resized past the screen, and a position on another display is not restored, so the window opens on the main display at the saved size. Full screen is not saved.
+
 ## Limits
 
 The plugin applies CSS zoom and converts what the page measures to the zoomed scale: element positions and sizes, the window and page viewport size, pointer positions, SVG screen matrices, wheel deltas, media queries (widths and resolutions) in style sheets and `matchMedia`, and the viewport units in style sheets and inline styles. Some things fall outside that conversion:
