@@ -28,10 +28,11 @@ The Desktop app's native menus and window controls keep their normal size.
 
 ## Limits
 
-The plugin applies CSS zoom and converts what the page measures to the zoomed scale: element positions and sizes, the window and page viewport size, pointer positions, SVG screen matrices, media queries in style sheets and `matchMedia`, and the viewport units in style sheets and inline styles. Some things fall outside that conversion:
+The plugin applies CSS zoom and converts what the page measures to the zoomed scale: element positions and sizes, the window and page viewport size, pointer positions, SVG screen matrices, wheel deltas, media queries (widths and resolutions) in style sheets and `matchMedia`, and the viewport units in style sheets and inline styles. Some things fall outside that conversion:
 
-- A viewport size (`vw`, `vh`) in a style rule added from script with `insertRule`, inside a shadow root, or on a MathML element is not converted. Such an element can come out larger than the window.
-- `IntersectionObserver` rectangles still use the real window size.
+- A viewport size (`vw`, `vh`) in a style rule added from script with `insertRule`, in a constructed style sheet added with `adoptedStyleSheets.push` instead of assignment, inside a shadow root, or on a MathML element is not converted. Such an element can come out larger than the window.
+- `IntersectionObserver` rectangles and touch coordinates still use the real window size.
+- A size measured in the same script step that sets an inline viewport size or adds a style element still sees the unconverted value; the next step sees the converted one.
 - Every script on the page sees the converted values, including other plugins.
 - A PDF that is already open keeps its sharpness from before a scale change until it is reloaded, opened again or zoomed in the preview.
 
