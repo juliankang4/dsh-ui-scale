@@ -47,15 +47,52 @@ export function installScaleShim(initial: number): ScaleShim {
     })
   }
 
-  const convert = (target: object, names: string[], to: (this: unknown, value: number) => number) => {
+  const owner = (target: object, name: string) => {
+    let found: object | null = target
+    while (found !== null && !Object.hasOwn(found, name)) found = Object.getPrototypeOf(found)
+    return found
+  }
+  // Converts a numeric getter, and the matching setter back to window pixels when `from` is given.
+  const convert = (target: object, names: string[], to: (this: unknown, value: number) => number, from?: (this: unknown, value: number) => number) => {
     for (const name of names) {
-      let owner: object | null = target
-      while (owner !== null && !Object.hasOwn(owner, name)) owner = Object.getPrototypeOf(owner)
-      const get = owner === null ? undefined : Object.getOwnPropertyDescriptor(owner, name)!.get
-      if (get !== undefined) patch(owner!, name as never, { get(this: unknown) { return to.call(this, get.call(this) as number) } })
+      const found = owner(target, name)
+      const { get, set } = found === null ? {} : Object.getOwnPropertyDescriptor(found, name)!
+      if (get === undefined) continue
+      patch(found!, name as never, {
+        get(this: unknown) { return to.call(this, get.call(this) as number) },
+        ...from !== undefined && set !== undefined ? { set(this: unknown, value: number) { set.call(this, from.call(this, value)) } } : {},
+      })
     }
   }
   convert(window, ['innerWidth', 'innerHeight'], value => value / z)
+  // The element that stands for the viewport reports window pixels for its size and scrolling:
+  // the root (the body in quirks mode) for its client size, the scrolling element for the rest.
+  const viewport = (element: unknown) => element === (document.compatMode === 'BackCompat' ? document.body : document.documentElement)
+  const scroller = (element: unknown) => element !== null && element === document.scrollingElement
+  convert(Element.prototype, ['clientWidth', 'clientHeight'], function (value) { return viewport(this) ? value / z : value })
+  convert(Element.prototype, ['scrollWidth', 'scrollHeight', 'scrollTop', 'scrollLeft'],
+    function (value) { return scroller(this) ? value / z : value },
+    function (value) { return scroller(this) ? value * z : value })
+  convert(window, ['scrollX', 'scrollY', 'pageXOffset', 'pageYOffset'], value => value / z)
+  const toWindow = (args: unknown[]) => {
+    const [x, y] = args
+    if (typeof x !== 'object' || x === null) return args.length < 2 ? args : [Number(x) * z, Number(y) * z]
+    // Read the members directly: scroll options may come from a prototype or getters (a DOMRect).
+    const { left, top, behavior } = x as ScrollToOptions
+    return [{
+      ...left === undefined ? {} : { left: left * z },
+      ...top === undefined ? {} : { top: top * z },
+      ...behavior === undefined ? {} : { behavior },
+    }]
+  }
+  for (const name of ['scroll', 'scrollTo', 'scrollBy'] as const) {
+    for (const [target, applies] of [[window, () => true], [Element.prototype, scroller]] as const) {
+      const found = owner(target, name)
+      const original = found === null ? undefined : (found as Record<string, unknown>)[name]
+      if (typeof original !== 'function') continue
+      patch(found!, name as never, { value(this: unknown, ...args: unknown[]) { return original.apply(this, applies(this) ? toWindow(args) : args) } })
+    }
+  }
   convert(VisualViewport.prototype, ['width', 'height', 'offsetLeft', 'offsetTop', 'pageLeft', 'pageTop'], value => value / z)
   // Events created by page code already carry the CSS pixels it computed.
   convert(MouseEvent.prototype, ['clientX', 'clientY', 'pageX', 'pageY', 'x', 'y', 'offsetX', 'offsetY', 'movementX', 'movementY'],
