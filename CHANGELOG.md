@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- The Desktop app reopens its window at the size and position it was left in.
+
 ## 0.1.2
 
 - Dialogs and panels sized with inline viewport units, such as the cost-meter details dialog, fit the window.
