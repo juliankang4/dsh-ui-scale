@@ -49,3 +49,7 @@ test('divides viewport units but leaves strings and urls alone', async () => {
   assert.equal(scaleViewportUnits(`url(/a\\)1vw.png) "x\\"2vh"`), `url(/a\\)1vw.png) "x\\"2vh"`)
   assert.equal(scaleViewportUnits('var(--gap-2vw) 12px'), 'var(--gap-2vw) 12px')
 })
+
+test('fails on purpose to prove the merge gate', () => {
+  assert.equal(1, 2)
+})
