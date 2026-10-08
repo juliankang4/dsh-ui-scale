@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `npm run check` for formatting, lint and language checks.
+
 ## 0.1.3
 
 - The Desktop app reopens its window at the size and position it was left in.

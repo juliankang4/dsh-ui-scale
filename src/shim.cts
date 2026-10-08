@@ -10,7 +10,7 @@
 export function scaleViewportUnits(value: string): string {
   return value.replace(
     /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|url\(\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:[^)\\]|\\.)*)\s*\))|(?<![\w.-])(-?\d*\.?\d+)([sld]?v(?:w|h|i|b|min|max))\b/g,
-    (match, kept: string | undefined, n: string, unit: string) => kept ?? `calc(${n}${unit} / var(--dsh-ui-scale, 1))`,
+    (_match, kept: string | undefined, n: string, unit: string) => kept ?? `calc(${n}${unit} / var(--dsh-ui-scale, 1))`,
   )
 }
 
@@ -29,20 +29,29 @@ export function installScaleShim(initial: number): ScaleShim {
   const patch = <T extends object>(owner: T, name: keyof T & string, descriptor: PropertyDescriptor) => {
     const original = Object.getOwnPropertyDescriptor(owner, name)!
     Object.defineProperty(owner, name, { ...original, ...descriptor })
-    undo.push(() => { Object.defineProperty(owner, name, original) })
+    undo.push(() => {
+      Object.defineProperty(owner, name, original)
+    })
   }
 
-  const rect = (r: DOMRect) => z === 1 ? r : new DOMRect(r.x / z, r.y / z, r.width / z, r.height / z)
+  const rect = (r: DOMRect) => (z === 1 ? r : new DOMRect(r.x / z, r.y / z, r.width / z, r.height / z))
   for (const proto of [Element.prototype, Range.prototype] as (Element | Range)[]) {
     const one = proto.getBoundingClientRect
     const all = proto.getClientRects
-    patch(proto, 'getBoundingClientRect', { value(this: Element & Range) { return rect(one.call(this)) } })
+    patch(proto, 'getBoundingClientRect', {
+      value(this: Element & Range) {
+        return rect(one.call(this))
+      },
+    })
     patch(proto, 'getClientRects', {
       value(this: Element & Range) {
         const list = all.call(this)
         if (z === 1) return list
         const rects = Array.from(list, rect)
-        return Object.setPrototypeOf(Object.assign(rects, { item: (i: number) => rects[i] ?? null }), DOMRectList.prototype)
+        return Object.setPrototypeOf(
+          Object.assign(rects, { item: (i: number) => rects[i] ?? null }),
+          DOMRectList.prototype,
+        )
       },
     })
   }
@@ -53,59 +62,116 @@ export function installScaleShim(initial: number): ScaleShim {
     return found
   }
   // Converts a numeric getter, and the matching setter back to window pixels when `from` is given.
-  const convert = (target: object, names: string[], to: (this: unknown, value: number) => number, from?: (this: unknown, value: number) => number) => {
+  const convert = (
+    target: object,
+    names: string[],
+    to: (this: unknown, value: number) => number,
+    from?: (this: unknown, value: number) => number,
+  ) => {
     for (const name of names) {
       const found = owner(target, name)
       const { get, set } = found === null ? {} : Object.getOwnPropertyDescriptor(found, name)!
       if (get === undefined) continue
       patch(found!, name as never, {
-        get(this: unknown) { return to.call(this, get.call(this) as number) },
-        ...from !== undefined && set !== undefined ? { set(this: unknown, value: number) { set.call(this, from.call(this, value)) } } : {},
+        get(this: unknown) {
+          return to.call(this, get.call(this) as number)
+        },
+        ...(from !== undefined && set !== undefined
+          ? {
+              set(this: unknown, value: number) {
+                set.call(this, from.call(this, value))
+              },
+            }
+          : {}),
       })
     }
   }
-  convert(window, ['innerWidth', 'innerHeight'], value => value / z)
+  convert(window, ['innerWidth', 'innerHeight'], (value) => value / z)
   // The element that stands for the viewport reports window pixels for its size and scrolling:
   // the root (the body in quirks mode) for its client size, the scrolling element for the rest.
-  const viewport = (element: unknown) => element === (document.compatMode === 'BackCompat' ? document.body : document.documentElement)
+  const viewport = (element: unknown) =>
+    element === (document.compatMode === 'BackCompat' ? document.body : document.documentElement)
   const scroller = (element: unknown) => element !== null && element === document.scrollingElement
-  convert(Element.prototype, ['clientWidth', 'clientHeight'], function (value) { return viewport(this) ? value / z : value })
-  convert(Element.prototype, ['scrollWidth', 'scrollHeight', 'scrollTop', 'scrollLeft'],
-    function (value) { return scroller(this) ? value / z : value },
-    function (value) { return scroller(this) ? value * z : value })
-  convert(window, ['scrollX', 'scrollY', 'pageXOffset', 'pageYOffset'], value => value / z)
+  convert(Element.prototype, ['clientWidth', 'clientHeight'], function (value) {
+    return viewport(this) ? value / z : value
+  })
+  convert(
+    Element.prototype,
+    ['scrollWidth', 'scrollHeight', 'scrollTop', 'scrollLeft'],
+    function (value) {
+      return scroller(this) ? value / z : value
+    },
+    function (value) {
+      return scroller(this) ? value * z : value
+    },
+  )
+  convert(window, ['scrollX', 'scrollY', 'pageXOffset', 'pageYOffset'], (value) => value / z)
   const toWindow = (args: unknown[]) => {
     const [x, y] = args
     if (typeof x !== 'object' || x === null) return args.length < 2 ? args : [Number(x) * z, Number(y) * z]
     // Read the members directly: scroll options may come from a prototype or getters (a DOMRect).
     const { left, top, behavior } = x as ScrollToOptions
-    return [{
-      ...left === undefined ? {} : { left: left * z },
-      ...top === undefined ? {} : { top: top * z },
-      ...behavior === undefined ? {} : { behavior },
-    }]
+    return [
+      {
+        ...(left === undefined ? {} : { left: left * z }),
+        ...(top === undefined ? {} : { top: top * z }),
+        ...(behavior === undefined ? {} : { behavior }),
+      },
+    ]
   }
   for (const name of ['scroll', 'scrollTo', 'scrollBy'] as const) {
-    for (const [target, applies] of [[window, () => true], [Element.prototype, scroller]] as const) {
+    for (const [target, applies] of [
+      [window, () => true],
+      [Element.prototype, scroller],
+    ] as const) {
       const found = owner(target, name)
       const original = found === null ? undefined : (found as Record<string, unknown>)[name]
       if (typeof original !== 'function') continue
-      patch(found!, name as never, { value(this: unknown, ...args: unknown[]) { return original.apply(this, applies(this) ? toWindow(args) : args) } })
+      patch(found!, name as never, {
+        value(this: unknown, ...args: unknown[]) {
+          return original.apply(this, applies(this) ? toWindow(args) : args)
+        },
+      })
     }
   }
-  convert(VisualViewport.prototype, ['width', 'height', 'offsetLeft', 'offsetTop', 'pageLeft', 'pageTop'], value => value / z)
+  convert(
+    VisualViewport.prototype,
+    ['width', 'height', 'offsetLeft', 'offsetTop', 'pageLeft', 'pageTop'],
+    (value) => value / z,
+  )
   // Events created by page code already carry the CSS pixels it computed.
-  convert(MouseEvent.prototype, ['clientX', 'clientY', 'pageX', 'pageY', 'x', 'y', 'offsetX', 'offsetY', 'layerX', 'layerY', 'movementX', 'movementY'],
-    function (this: unknown, value) { return (this as Event).isTrusted ? value / z : value })
+  convert(
+    MouseEvent.prototype,
+    [
+      'clientX',
+      'clientY',
+      'pageX',
+      'pageY',
+      'x',
+      'y',
+      'offsetX',
+      'offsetY',
+      'layerX',
+      'layerY',
+      'movementX',
+      'movementY',
+    ],
+    function (this: unknown, value) {
+      return (this as Event).isTrusted ? value / z : value
+    },
+  )
   // Wheel deltas in pixels scroll by CSS pixels, as under browser zoom.
-  convert(WheelEvent.prototype, ['deltaX', 'deltaY', 'deltaZ'],
-    function (this: unknown, value) { return (this as WheelEvent).isTrusted && (this as WheelEvent).deltaMode === 0 ? value / z : value })
+  convert(WheelEvent.prototype, ['deltaX', 'deltaY', 'deltaZ'], function (this: unknown, value) {
+    return (this as WheelEvent).isTrusted && (this as WheelEvent).deltaMode === 0 ? value / z : value
+  })
   // Canvas content such as PDF pages renders at the sharper ratio, as under browser zoom.
   const nativeRatio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')!.get!
-  convert(window, ['devicePixelRatio'], value => value * z)
+  convert(window, ['devicePixelRatio'], (value) => value * z)
   // Zoom-aware code would otherwise divide the converted rects once more.
   // An element without a box (hidden or detached) reports 1 either way.
-  convert(Element.prototype, ['currentCSSZoom'], function (value) { return (this as Element).getClientRects().length > 0 ? value / z : value })
+  convert(Element.prototype, ['currentCSSZoom'], function (value) {
+    return (this as Element).getClientRects().length > 0 ? value / z : value
+  })
 
   // An SVG element's screen matrix includes the zoom; pointer math pairs it with CSS pixel events.
   const screenMatrix = SVGGraphicsElement.prototype.getScreenCTM
@@ -117,10 +183,19 @@ export function installScaleShim(initial: number): ScaleShim {
   })
 
   // Hit tests take window pixels; callers now pass CSS pixels.
-  for (const name of ['elementFromPoint', 'elementsFromPoint', 'caretRangeFromPoint', 'caretPositionFromPoint'] as const) {
+  for (const name of [
+    'elementFromPoint',
+    'elementsFromPoint',
+    'caretRangeFromPoint',
+    'caretPositionFromPoint',
+  ] as const) {
     const original = (Document.prototype as unknown as Record<string, unknown>)[name]
     if (typeof original !== 'function') continue
-    patch(Document.prototype, name as never, { value(this: Document, x: number, y: number) { return original.call(this, x * z, y * z) } })
+    patch(Document.prototype, name as never, {
+      value(this: Document, x: number, y: number) {
+        return original.call(this, x * z, y * z)
+      },
+    })
   }
 
   // Viewport units resolve before zoom, so 100vw would be z windows wide. Style sheet and inline
@@ -137,12 +212,15 @@ export function installScaleShim(initial: number): ScaleShim {
     const own = nativeRatio.call(window) as number
     return n === own * z ? own : n / z
   }
-  const scaleQuery = (text: string) => text
-    .replace(ratioFeature, feature => feature.replace(new RegExp(`${number}(?![\\w.%])`, 'gi'), n => `${ratio(Number(n))}`))
-    .replace(sized, (_, n: string, unit: string) => {
-      if (/^(px|r?em)$/i.test(unit)) return `${Number(n) * z}${unit}`
-      return `${/^(dppx|x)$/i.test(unit) ? ratio(Number(n)) : Number(n) / z}${unit}`
-    })
+  const scaleQuery = (text: string) =>
+    text
+      .replace(ratioFeature, (feature) =>
+        feature.replace(new RegExp(`${number}(?![\\w.%])`, 'gi'), (n) => `${ratio(Number(n))}`),
+      )
+      .replace(sized, (_, n: string, unit: string) => {
+        if (/^(px|r?em)$/i.test(unit)) return `${Number(n) * z}${unit}`
+        return `${/^(dppx|x)$/i.test(unit) ? ratio(Number(n)) : Number(n) / z}${unit}`
+      })
   const lists = new Set<WeakRef<MediaQueryList>>()
   const refreshers = new WeakMap<MediaQueryList, () => void>()
   const nativeMatchMedia = window.matchMedia
@@ -178,8 +256,11 @@ export function installScaleShim(initial: number): ScaleShim {
         if (byCapture.size === 0) registered.delete(listener)
         sync()
       }
-      const captureOf = (options?: EventListenerOptions | boolean) => typeof options === 'boolean' ? options : options?.capture === true
-      listen.call(list, 'change', (event) => { handler?.call(list, event as MediaQueryListEvent) })
+      const captureOf = (options?: EventListenerOptions | boolean) =>
+        typeof options === 'boolean' ? options : options?.capture === true
+      listen.call(list, 'change', (event) => {
+        handler?.call(list, event as MediaQueryListEvent)
+      })
       native = nativeMatchMedia.call(window, scaleQuery(source))
       Object.defineProperties(list, {
         media: { value: text },
@@ -192,43 +273,76 @@ export function installScaleShim(initial: number): ScaleShim {
           },
         },
         addEventListener: {
-          value(type: string, listener: EventListenerOrEventListenerObject | null, options?: AddEventListenerOptions | boolean) {
+          value(
+            type: string,
+            listener: EventListenerOrEventListenerObject | null,
+            options?: AddEventListenerOptions | boolean,
+          ) {
             const capture = captureOf(options)
             const signal = typeof options === 'object' ? options.signal : undefined
-            const track = type === 'change' && listener !== null && signal?.aborted !== true && registered.get(listener)?.has(capture) !== true
+            const track =
+              type === 'change' &&
+              listener !== null &&
+              signal?.aborted !== true &&
+              registered.get(listener)?.has(capture) !== true
             let marker: EventListener | null = null
             if (track && typeof options === 'object' && options.once === true) {
-              marker = () => { registered.get(listener)?.set(capture, null); drop(listener, capture) }
+              marker = () => {
+                registered.get(listener)?.set(capture, null)
+                drop(listener, capture)
+              }
               listen.call(list, 'change', marker, { capture, once: true, signal })
             }
             listen.call(list, type, listener, options)
             if (!track) return
             registered.set(listener, (registered.get(listener) ?? new Map()).set(capture, marker))
-            signal?.addEventListener('abort', () => { drop(listener, capture) }, { once: true })
+            signal?.addEventListener(
+              'abort',
+              () => {
+                drop(listener, capture)
+              },
+              { once: true },
+            )
             sync()
           },
         },
         removeEventListener: {
-          value(type: string, listener: EventListenerOrEventListenerObject | null, options?: EventListenerOptions | boolean) {
+          value(
+            type: string,
+            listener: EventListenerOrEventListenerObject | null,
+            options?: EventListenerOptions | boolean,
+          ) {
             unlisten.call(list, type, listener, options)
             if (type === 'change') drop(listener, captureOf(options))
           },
         },
-        addListener: { value: (listener: EventListener | null) => { (list as EventTarget).addEventListener('change', listener) } },
-        removeListener: { value: (listener: EventListener | null) => { (list as EventTarget).removeEventListener('change', listener) } },
+        addListener: {
+          value: (listener: EventListener | null) => {
+            ;(list as EventTarget).addEventListener('change', listener)
+          },
+        },
+        removeListener: {
+          value: (listener: EventListener | null) => {
+            ;(list as EventTarget).removeEventListener('change', listener)
+          },
+        },
       })
       refreshers.set(list, () => {
         const before = native.matches
         unlisten.call(native, 'change', relay as EventListener)
         native = nativeMatchMedia.call(window, scaleQuery(source))
         sync()
-        if (native.matches !== before) relay(new MediaQueryListEvent('change', { matches: native.matches, media: text }))
+        if (native.matches !== before)
+          relay(new MediaQueryListEvent('change', { matches: native.matches, media: text }))
       })
       lists.add(new WeakRef(list))
       return list
     },
   })
-  const scaleDeclarations = (declarations: CSSStyleDeclaration, keep: (name: string, value: string, next: string, priority: string) => void) => {
+  const scaleDeclarations = (
+    declarations: CSSStyleDeclaration,
+    keep: (name: string, value: string, next: string, priority: string) => void,
+  ) => {
     for (const name of Array.from(declarations)) {
       const value = declarations.getPropertyValue(name)
       // Our own writes come back through the observer; converted values are left alone.
@@ -250,14 +364,18 @@ export function installScaleShim(initial: number): ScaleShim {
     if (media.has(list) || !hasLength(text)) return
     media.set(list, text)
     bound(list, text)
-    undo.push(() => { list.mediaText = text })
+    undo.push(() => {
+      list.mediaText = text
+    })
   }
   const walk = (rules: CSSRuleList) => {
     for (const rule of Array.from(rules)) {
       const declarations = (rule as Partial<CSSStyleRule>).style
       if (declarations !== undefined) {
         scaleDeclarations(declarations, (name, value, _, priority) => {
-          undo.push(() => { declarations.setProperty(name, value, priority) })
+          undo.push(() => {
+            declarations.setProperty(name, value, priority)
+          })
         })
       }
       if (rule instanceof CSSMediaRule) follow(rule.media)
@@ -273,7 +391,8 @@ export function installScaleShim(initial: number): ScaleShim {
         walk(sheet.cssRules)
         seen.add(sheet)
         // Frameworks may rewrite a style element's text node in place; that replaces its sheet.
-        if (sheet.ownerNode?.nodeName === 'STYLE') observer.observe(sheet.ownerNode, { characterData: true, subtree: true })
+        if (sheet.ownerNode?.nodeName === 'STYLE')
+          observer.observe(sheet.ownerNode, { characterData: true, subtree: true })
       } catch {
         // A sheet that is still loading throws; its load event scans again.
       }
@@ -290,14 +409,15 @@ export function installScaleShim(initial: number): ScaleShim {
   // Each converted inline value is restored on dispose unless page code has replaced it since.
   // Weak references let removed elements go.
   const converted = new Set<WeakRef<CSSStyleDeclaration>>()
-  const originals = new WeakMap<CSSStyleDeclaration, Map<string, { value: string, next: string, priority: string }>>()
+  const originals = new WeakMap<CSSStyleDeclaration, Map<string, { value: string; next: string; priority: string }>>()
   const inline = (element: Element) => {
     if (!(element instanceof HTMLElement || element instanceof SVGElement)) return
     const declarations = element.style
     scaleDeclarations(declarations, (name, value, next, priority) => {
       let own = originals.get(declarations)
       if (own === undefined) {
-        originals.set(declarations, own = new Map())
+        own = new Map()
+        originals.set(declarations, own)
         converted.add(new WeakRef(declarations))
       }
       own.set(name, { value, next, priority })
