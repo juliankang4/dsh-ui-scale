@@ -57,4 +57,10 @@ The settings row writes this field. You can also set it in the profile's `cordis
     scale: 125
 ```
 
+## Development
+
+Use Node.js 24. Install dependencies with `npm ci`. Run `npm run check` for formatting, lint, JavaScript syntax and strict TypeScript checks. Run `npm test` to build and test the shipped bundle.
+
+Type suppressions must use `@ts-expect-error: <reason>`. Inline lint suppressions must name one rule: `biome-ignore lint/<group>/<rule>: <reason>`. Blanket and file-wide lint suppressions are rejected. Non-null assertions remain allowed where TypeScript cannot follow an existing guard. The npm-generated lockfile is not reformatted.
+
 Tested with dsh 0.2.0-rc.2 (web in Chrome, and the macOS Desktop app).

@@ -76,7 +76,7 @@ interface RowInjected {
 type RowProps = PropsRuntime<'settings.general.item'> & PropsLocale<'ui-scale'> & InjectFace<RowInjected>
 
 function ScaleRow({ t, useScale, setScale }: RowProps) {
-  const scale = useScale(value => value)
+  const scale = useScale((value) => value)
   // Slider position while dragging; applied on release so the slider does not move under the pointer.
   const [dragged, setDragged] = useState<number>()
   // Field text while editing; applied on Enter or blur.
@@ -91,7 +91,9 @@ function ScaleRow({ t, useScale, setScale }: RowProps) {
   // Zooming shifts the scrolled Settings content, so bring this row back into view.
   const change = (next: number) => {
     setScale(next)
-    requestAnimationFrame(() => { row.current?.scrollIntoView({ block: 'nearest' }) })
+    requestAnimationFrame(() => {
+      row.current?.scrollIntoView({ block: 'nearest' })
+    })
   }
 
   // The native `change` event fires on pointer release and on each keyboard step;
@@ -104,7 +106,9 @@ function ScaleRow({ t, useScale, setScale }: RowProps) {
       change(Number(input.value))
     }
     input.addEventListener('change', commit)
-    return () => { input.removeEventListener('change', commit) }
+    return () => {
+      input.removeEventListener('change', commit)
+    }
   })
 
   const commitText = () => {
@@ -114,23 +118,40 @@ function ScaleRow({ t, useScale, setScale }: RowProps) {
     if (parsed !== undefined) change(parsed)
   }
 
-  return h('div', { ref: row, className: 'dsh-ui-scale' },
-    h('div', { className: 'dsh-ui-scale-head' },
-      h('div', { className: 'dsh-ui-scale-text' },
+  return h(
+    'div',
+    { ref: row, className: 'dsh-ui-scale' },
+    h(
+      'div',
+      { className: 'dsh-ui-scale-head' },
+      h(
+        'div',
+        { className: 'dsh-ui-scale-text' },
         h('div', { id: `${id}title`, className: 'dsh-ui-scale-title' }, t('title')),
-        h('div', { id: `${id}desc`, className: 'dsh-ui-scale-desc' }, t('description'))),
-      h('label', { className: 'dsh-ui-scale-field' },
+        h('div', { id: `${id}desc`, className: 'dsh-ui-scale-desc' }, t('description')),
+      ),
+      h(
+        'label',
+        { className: 'dsh-ui-scale-field' },
         h('input', {
           type: 'text',
           inputMode: 'numeric',
           'aria-label': t('input'),
           value: text ?? String(shown),
-          onChange: event => { setText(event.target.value) },
+          onChange: (event) => {
+            setText(event.target.value)
+          },
           onBlur: commitText,
-          onKeyDown: (event) => { if (event.key === 'Enter') commitText() },
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') commitText()
+          },
         }),
-        h('span', { 'aria-hidden': true }, '%'))),
-    h('div', { className: 'dsh-ui-scale-controls' },
+        h('span', { 'aria-hidden': true }, '%'),
+      ),
+    ),
+    h(
+      'div',
+      { className: 'dsh-ui-scale-controls' },
       h('input', {
         ref: slider,
         type: 'range',
@@ -147,13 +168,26 @@ function ScaleRow({ t, useScale, setScale }: RowProps) {
           setDragged(value === resting ? undefined : value)
         },
       }),
-      h('div', { role: 'group', 'aria-label': t('presets'), className: 'dsh-ui-scale-presets' },
-        PRESETS.map(preset => h('button', {
-          key: preset,
-          type: 'button',
-          'aria-pressed': preset === scale,
-          onClick: () => { change(preset) },
-        }, `${preset}%`)))))
+      h(
+        'div',
+        { role: 'group', 'aria-label': t('presets'), className: 'dsh-ui-scale-presets' },
+        PRESETS.map((preset) =>
+          h(
+            'button',
+            {
+              key: preset,
+              type: 'button',
+              'aria-pressed': preset === scale,
+              onClick: () => {
+                change(preset)
+              },
+            },
+            `${preset}%`,
+          ),
+        ),
+      ),
+    ),
+  )
 }
 
 export const inject = ['slots', 'locale', 'configForms']
@@ -162,7 +196,12 @@ export function apply(ctx: Context): void {
   // The host half's head script installs the shim before first paint. A page loaded before the
   // plugin was enabled (Desktop collects head scripts once per start) gets it here instead.
   const shim = (globalThis as { __dshUiScale?: ScaleShim }).__dshUiScale ?? installScaleShim(100)
-  ctx.effect(() => () => { shim.dispose() }, 'ui-scale: zoom')
+  ctx.effect(
+    () => () => {
+      shim.dispose()
+    },
+    'ui-scale: zoom',
+  )
   let scale = shim.get()
   const listeners = new Set<() => void>()
   const show = (next: number) => {
@@ -173,7 +212,9 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = Object.assign(document.createElement('style'), { id: 'dsh-ui-scale', textContent: rowCss })
     document.head.append(style)
-    return () => { style.remove() }
+    return () => {
+      style.remove()
+    }
   }, 'ui-scale: row styles')
 
   const form = ctx.configForms.get<{ scale: number }>(NS)
@@ -192,37 +233,50 @@ export function apply(ctx: Context): void {
     show(next)
     writing += 1
     // A rejected write falls back to the stored value; on pages without Host persistence the new scale stays.
-    form.set('scale', next).catch(() => {}).finally(() => {
-      writing -= 1
-      adopt()
-    })
+    form
+      .set('scale', next)
+      .catch(() => {})
+      .finally(() => {
+        writing -= 1
+        adopt()
+      })
   }
   const scaleSource: HostObservable<number> = {
     getSnapshot: () => scale,
     subscribe: (listener) => {
       listeners.add(listener)
-      return () => { listeners.delete(listener) }
+      return () => {
+        listeners.delete(listener)
+      }
     },
   }
 
   // Desktop opens its window at a fixed size; the host half's head script restores what is saved here.
-  if (location.protocol === 'dsh-app:') ctx.effect(() => {
-    const timer = setInterval(() => {
-      // A full-screen size is no window size to come back to.
-      if (outerWidth === screen.width && outerHeight === screen.height) return
-      const bounds = JSON.stringify({ x: screenX, y: screenY, w: outerWidth, h: outerHeight })
-      if (bounds !== localStorage.getItem(WINDOW_KEY)) localStorage.setItem(WINDOW_KEY, bounds)
-    }, 1000)
-    return () => { clearInterval(timer) }
-  }, 'ui-scale: window bounds')
+  if (location.protocol === 'dsh-app:')
+    ctx.effect(() => {
+      const timer = setInterval(() => {
+        // A full-screen size is no window size to come back to.
+        if (outerWidth === screen.width && outerHeight === screen.height) return
+        const bounds = JSON.stringify({ x: screenX, y: screenY, w: outerWidth, h: outerHeight })
+        if (bounds !== localStorage.getItem(WINDOW_KEY)) localStorage.setItem(WINDOW_KEY, bounds)
+      }, 1000)
+      return () => {
+        clearInterval(timer)
+      }
+    }, 'ui-scale: window bounds')
 
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'ui-scale: en/zh strings')
   ctx.effect(() => ctx.locale.register(NS, 'ko', ko), 'ui-scale: ko strings')
-  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
-    name: 'settings.general.item',
-    id: 'ui-scale',
-    order: 11.5,
-    locale: NS,
-    inject: (): RowInjected => ({ hooks: { scale: scaleSource }, setScale }),
-  }, ScaleRow))
+  ctx.slots.inject('settings.general.item', () =>
+    ctx.slots.register(
+      {
+        name: 'settings.general.item',
+        id: 'ui-scale',
+        order: 11.5,
+        locale: NS,
+        inject: (): RowInjected => ({ hooks: { scale: scaleSource }, setScale }),
+      },
+      ScaleRow,
+    ),
+  )
 }

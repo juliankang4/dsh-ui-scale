@@ -4,7 +4,15 @@ import { test } from 'node:test'
 // lib/client.js registers a factory with the dsh module loader; capture it to reach the exports.
 type Exports = { parseScale: (text: string) => number | undefined }
 let factory: ((require: (id: string) => unknown) => Exports) | undefined
-Object.assign(globalThis, { window: { __ModuleLoader__: { load: (row: { factory: typeof factory }) => { factory = row.factory } } } })
+Object.assign(globalThis, {
+  window: {
+    __ModuleLoader__: {
+      load: (row: { factory: typeof factory }) => {
+        factory = row.factory
+      },
+    },
+  },
+})
 await import('../lib/client.js')
 const { parseScale } = factory!(() => ({}))
 
@@ -29,7 +37,7 @@ test('rejects text that is not a number', () => {
 })
 
 test('divides viewport units but leaves strings and urls alone', async () => {
-  const { scaleViewportUnits } = await import('../lib/shim.cjs') as { scaleViewportUnits: (value: string) => string }
+  const { scaleViewportUnits } = (await import('../lib/shim.cjs')) as { scaleViewportUnits: (value: string) => string }
   const scaled = (unit: string) => `calc(${unit} / var(--dsh-ui-scale, 1))`
   assert.equal(scaleViewportUnits('calc(100vh - 2 * 24px)'), `calc(${scaled('100vh')} - 2 * 24px)`)
   assert.equal(scaleViewportUnits('-10vw 0 0 .5dvh'), `${scaled('-10vw')} 0 0 ${scaled('.5dvh')}`)
