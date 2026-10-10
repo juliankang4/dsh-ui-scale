@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 - Add `npm run check` for formatting, lint and language checks.
 - Run checks and tests in CI with one summary check.
