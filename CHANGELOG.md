@@ -4,6 +4,7 @@
 
 - Add `npm run check` for formatting, lint and language checks.
 - Run checks and tests in CI with one summary check.
+- Update the pinned dsh development packages to 0.2.1-alpha.2.
 
 ## 0.1.3
 

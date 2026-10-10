@@ -65,4 +65,4 @@ Type suppressions must use `@ts-expect-error: <reason>`. Inline lint suppression
 
 Pull requests and pushes to `main` run the same check and test commands. The `CI passed` summary succeeds only when both jobs succeed; failed, cancelled and skipped jobs fail the summary.
 
-Tested with dsh 0.2.0-rc.2 (web in Chrome, and the macOS Desktop app).
+Tested with dsh 0.2.1-alpha.2 (web in Chrome) and dsh 0.2.0-rc.2 (macOS Desktop app).
