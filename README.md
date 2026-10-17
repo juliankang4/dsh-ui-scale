@@ -18,7 +18,7 @@ Open Settings > General > Interface scale. There are three ways to set the scale
 - Type a percent in the field and press Enter or click elsewhere. The value is rounded to a whole percent, and a value below 50 or above 200 is set to the nearest limit.
 - Click a preset: 100, 110, 125, 150, 175 or 200%.
 
-The scale is saved in the profile configuration. It survives restarts and is applied before the main window appears. Each profile (`web`, `desktop`) keeps its own value. A page opened from another computer can change the scale for itself, but dsh does not save settings from such pages.
+The scale is saved in the profile configuration. It survives restarts and is applied before the main window appears. Each profile (`web`, `desktop`) keeps its own value, and every browser signed in to the same profile shares it. In dsh 0.2.0 a page opened from another computer can change the scale only for itself until it reloads, because that version does not save settings from such pages.
 
 ## What scales
 

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Update the pinned dsh development packages to 0.2.1-rc.2.
+- The README says that dsh 0.2.1 saves the scale from every signed-in browser.
 
 ## 0.1.4
 
