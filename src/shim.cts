@@ -35,12 +35,18 @@ export function installScaleShim(initial: number): ScaleShim {
   }
 
   const rect = (r: DOMRect) => (z === 1 ? r : new DOMRect(r.x / z, r.y / z, r.width / z, r.height / z))
+  // Desktop places the account Usage and Top up pages, a native view, at this element's rect
+  // read as window pixels. dsh markup (PlatformOverlay in ui-settings-account).
+  const nativeViewArea = (target: Element | Range) =>
+    target instanceof Element &&
+    target.matches('body > [role="dialog"][aria-modal="true"] > header[data-window-drag] + div')
   for (const proto of [Element.prototype, Range.prototype] as (Element | Range)[]) {
     const one = proto.getBoundingClientRect
     const all = proto.getClientRects
     patch(proto, 'getBoundingClientRect', {
       value(this: Element & Range) {
-        return rect(one.call(this))
+        const r = one.call(this)
+        return z !== 1 && nativeViewArea(this) ? r : rect(r)
       },
     })
     patch(proto, 'getClientRects', {

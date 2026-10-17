@@ -37,7 +37,7 @@ The plugin applies CSS zoom and converts what the page measures to the zoomed sc
 - A viewport size (`vw`, `vh`) in a style rule added from script with `insertRule`, in a constructed style sheet added with `adoptedStyleSheets.push` instead of assignment, inside a shadow root, or on a MathML element is not converted. Such an element can come out larger than the window.
 - `IntersectionObserver` rectangles and touch coordinates still use the real window size.
 - A size measured in the same script step that sets an inline viewport size or adds a style element still sees the unconverted value; the next step sees the converted one.
-- Every script on the page sees the converted values, including other plugins.
+- Every script on the page sees the converted values, including other plugins. The one exception is the Desktop account Usage and Top up area, whose position and size read in window pixels so the app can place those pages.
 - A PDF that is already open keeps its sharpness from before a scale change until it is reloaded, opened again or zoomed in the preview.
 
 In a browser you can also use the browser's own zoom; the two multiply.

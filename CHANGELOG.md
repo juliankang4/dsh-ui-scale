@@ -4,6 +4,7 @@
 
 - Update the pinned dsh development packages to 0.2.1-rc.2.
 - The README says that dsh 0.2.1 saves the scale from every signed-in browser.
+- In the Desktop app, the account Usage and Top up pages fill their area at every scale instead of opening smaller and out of place.
 
 ## 0.1.4
 
